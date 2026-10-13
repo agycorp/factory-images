@@ -1,0 +1,60 @@
+name: Promote Factory Images from GHCR (ghcr.io/agycorp/*) to GCP Artifact Registry
+on:
+  workflow_dispatch:
+    inputs:
+      target_project:
+        description: "Target GCP Project ID"
+        default: "gement03"
+        required: true
+      resource_prefix:
+        description: "Target Factory Prefix"
+        default: "condor-"
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  promote-from-ghcr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install crane
+        uses: imjasonh/setup-crane@v0.4
+
+      - name: Authenticate to GHCR and Target GCP Artifact Registry
+        env:
+          GAR_TOKEN: ${{ secrets.GAR_ACCESS_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GH_TOKEN" | crane auth login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "$GAR_TOKEN" | crane auth login us-central1-docker.pkg.dev -u oauth2accesstoken --password-stdin
+
+      - name: Promote all 8 images from ghcr.io/agycorp/* into gement03/condor-{scion,apps}
+        run: |
+          set -euo pipefail
+          T0=$(date +%s)
+          PROJ="${{ inputs.target_project || 'gement03' }}"
+          PREF="${{ inputs.resource_prefix || 'condor-' }}"
+          promote_one() {
+            local ghcr_pkg="$1"
+            local tag="$2"
+            local gar_repo="$3"
+            local gar_img="$4"
+            local src="ghcr.io/agycorp/${ghcr_pkg}:${tag}"
+            local dst_base="us-central1-docker.pkg.dev/${PROJ}/${PREF}${gar_repo}/${gar_img}"
+            crane copy "$src" "${dst_base}:${tag}"
+            crane copy "$src" "${dst_base}:stable"
+            echo "[GHCR->GAR] ${src} -> ${dst_base}:${tag} ($(crane digest ${dst_base}:${tag}))"
+          }
+          promote_one "scion-base" "nightly-20261005" "scion" "scion-base" &
+          promote_one "scion-claude" "nightly-20261005" "scion" "scion-claude" &
+          promote_one "condor-hub" "nightly-20261005" "scion" "${PREF}hub" &
+          promote_one "farmtable-cli" "441c599" "scion" "farmtable-cli" &
+          promote_one "farmtable-server" "441c599" "apps" "farmtable-server" &
+          promote_one "condor-queue-runner" "20261013-f1a382fd" "apps" "${PREF}queue-runner" &
+          promote_one "condor-repo-facts" "20261009-c98cc0ec" "apps" "${PREF}repo-facts" &
+          promote_one "condor-repo-maker" "20261009-b39f712c" "apps" "${PREF}repo-maker" &
+          wait
+          T1=$(date +%s)
+          echo "TOTAL GHCR->GAR 8-image promotion elapsed: $((T1 - T0))s"
