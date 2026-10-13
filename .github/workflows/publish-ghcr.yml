@@ -1,0 +1,57 @@
+name: Publish Factory Images to Public GHCR (ghcr.io/agycorp/*)
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install crane
+        uses: imjasonh/setup-crane@v0.4
+
+      - name: Authenticate to GCP Artifact Registry and GHCR
+        env:
+          GAR_TOKEN: ${{ secrets.GAR_ACCESS_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GAR_TOKEN" | crane auth login us-central1-docker.pkg.dev -u oauth2accesstoken --password-stdin
+          echo "$GH_TOKEN" | crane auth login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Copy & link all 8 factory images to ghcr.io/agycorp/*
+        run: |
+          set -euo pipefail
+          REPO_URL="https://github.com/agycorp/factory-images"
+          publish_img() {
+            local src="$1"
+            local dst_pkg="$2"
+            local tag="$3"
+            echo "=== Publishing $dst_pkg:$tag from $src ==="
+            # 1. Push :source-link with org.opencontainers.image.source label so GHCR links package to public repo agycorp/factory-images
+            crane mutate "$src" --label "org.opencontainers.image.source=${REPO_URL}" -t "ghcr.io/agycorp/${dst_pkg}:source-link"
+            # 2. Copy exact immutable digest from GAR to ghcr.io/agycorp/<pkg>:<tag> and :latest
+            crane copy "$src" "ghcr.io/agycorp/${dst_pkg}:${tag}"
+            crane copy "$src" "ghcr.io/agycorp/${dst_pkg}:latest"
+            echo "Verified digest: $(crane digest ghcr.io/agycorp/${dst_pkg}:${tag})"
+          }
+
+          publish_img "us-central1-docker.pkg.dev/gement03/condor-scion/scion-base:nightly-20261005" "scion-base" "nightly-20261005" &
+          publish_img "us-central1-docker.pkg.dev/gement03/condor-scion/scion-claude:nightly-20261005" "scion-claude" "nightly-20261005" &
+          publish_img "us-central1-docker.pkg.dev/gement03/condor-scion/condor-hub:nightly-20261005" "scion-hub" "nightly-20261005" &
+          publish_img "us-central1-docker.pkg.dev/gement03/condor-scion/condor-hub:nightly-20261005" "condor-hub" "nightly-20261005" &
+          wait
+
+          publish_img "us-central1-docker.pkg.dev/gement03/condor-scion/farmtable-cli:441c599" "farmtable-cli" "441c599" &
+          publish_img "us-central1-docker.pkg.dev/gement03/condor-apps/farmtable-server:441c599" "farmtable-server" "441c599" &
+          publish_img "us-central1-docker.pkg.dev/gement03/condor-apps/condor-queue-runner:20261013-f1a382fd" "queue-runner" "20261013-f1a382fd" &
+          publish_img "us-central1-docker.pkg.dev/gement03/condor-apps/condor-queue-runner:20261013-f1a382fd" "condor-queue-runner" "20261013-f1a382fd" &
+          publish_img "us-central1-docker.pkg.dev/gement03/condor-apps/condor-repo-facts:20261009-c98cc0ec" "repo-facts" "20261009-c98cc0ec" &
+          publish_img "us-central1-docker.pkg.dev/gement03/condor-apps/condor-repo-facts:20261009-c98cc0ec" "condor-repo-facts" "20261009-c98cc0ec" &
+          publish_img "us-central1-docker.pkg.dev/gement03/condor-apps/condor-repo-maker:20261009-b39f712c" "repo-maker" "20261009-b39f712c" &
+          publish_img "us-central1-docker.pkg.dev/gement03/condor-apps/condor-repo-maker:20261009-b39f712c" "condor-repo-maker" "20261009-b39f712c" &
+          wait
